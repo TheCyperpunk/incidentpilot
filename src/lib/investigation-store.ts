@@ -5,24 +5,24 @@ import { getCommitSha, getInstallationToken, getRepositoryForInstallation, githu
 import { runRepositoryInvestigation, runnerConfigured } from "@/lib/runner-client";
 
 const scriptedEvents: Array<{ type: string; message: string; detail: string }> = [
-  { type: "context_loaded", message: "Incident context loaded", detail: "Metrics, logs, and deployment metadata were attached." },
+  { type: "context_loaded", message: "Incident context loaded", detail: "Configured provider telemetry and repository metadata were attached." },
   { type: "triage_started", message: "Triage started", detail: "Classifying severity and prioritising investigation targets." },
-  { type: "evidence_collecting", message: "Evidence collection started", detail: "Comparing the healthy and degraded deployment snapshots." },
-  { type: "runner_queued", message: "Repository investigation queued", detail: "The isolated Codex runner will inspect the pinned v2.8.1 commit." },
-  { type: "repository_loaded", message: "Repository loaded", detail: "Pinned commit 7f3b2a1 checked out for inspection." },
-  { type: "test_completed", message: "Regression test reproduced", detail: "The checkout query regression test completed with the expected failure." },
-  { type: "root_cause_ready", message: "Root-cause hypothesis ready", detail: "Code, timing, logs, and test results point to the same query regression." },
+  { type: "evidence_collecting", message: "Evidence collection started", detail: "Checking which configured sources can provide verifiable evidence." },
+  { type: "runner_queued", message: "Repository investigation queued", detail: "The isolated Codex runner will inspect an immutable selected commit." },
+  { type: "repository_loaded", message: "Repository loaded", detail: "The selected repository snapshot was checked out for inspection." },
+  { type: "test_completed", message: "Repository test completed", detail: "The runner recorded either a test result or why no safe test was run." },
+  { type: "root_cause_ready", message: "Root-cause hypothesis ready", detail: "Repository evidence and test output are available for human review." },
 ];
 
 const statusByEvent: RunStatus[] = ["queued", "triaging", "collecting_evidence", "code_investigating", "code_investigating", "code_investigating", "awaiting_approval"];
 
 const rootCause: NonNullable<InvestigationRun["rootCause"]> = {
-  file: "src/orders/repository.ts",
-  function: "findCheckoutItems",
-  summary: "The v2.8.1 checkout query removed the index-aware condition, causing an expensive orders scan under normal checkout traffic.",
-  evidence: ["Deployment v2.8.1 preceded the spike by two minutes", "Database query timeout appears in checkout logs", "Database CPU rose from 41% to 94%", "Regression test reproduces the timeout"],
-  confidence: "high",
-  tests: [{ command: "npm test -- orders.repository", exitCode: 0, summary: "Regression scenario reproduced and diagnostic test completed." }],
+  file: "not available",
+  function: "not available",
+  summary: "No repository evidence is available because the isolated runner is not configured.",
+  evidence: ["No verified provider or repository evidence was supplied."],
+  confidence: "low",
+  tests: [{ command: "not run", exitCode: -1, summary: "No repository test was run." }],
   provider: "simulation",
 };
 
@@ -44,7 +44,7 @@ export async function assertInvestigationAccess() {
   return userId;
 }
 
-async function ensureIncident(externalKey: string) {
+async function ensureIncident(externalKey: string, triage: TriageResult) {
   const { supabase, userId } = await authenticatedClient();
   const { data: existingProject, error: projectLookupError } = await supabase
     .from("projects").select("id").eq("owner_id", userId).limit(1).maybeSingle();
@@ -87,8 +87,8 @@ async function ensureIncident(externalKey: string) {
 
   const { data, error } = await supabase.from("incidents").insert({
     project_id: projectId, repository_id: repositoryId, external_key: externalKey,
-    title: "Checkout API degradation", service: "checkout-api", severity: "high",
-    deployment_version: "v2.8.1", status: "investigating",
+    title: "Repository investigation", service: selectedRepository?.full_name ?? "unidentified-service", severity: triage.severity,
+    deployment_version: null, status: "investigating",
   }).select("id").single();
   if (error) throw error;
   return { supabase, incidentId: data.id, selectedRepository };
@@ -148,10 +148,10 @@ async function readRun(runId: string) {
 }
 
 export async function createInvestigation(externalKey: string, triage: TriageResult) {
-  const { supabase, incidentId, selectedRepository } = await ensureIncident(externalKey);
+  const { supabase, incidentId, selectedRepository } = await ensureIncident(externalKey, triage);
   const liveRunner = Boolean(selectedRepository?.installation_id && githubIntegrationConfigured() && runnerConfigured());
   const { data: run, error: runError } = await supabase.from("investigation_runs").insert({
-    incident_id: incidentId, status: "queued", pinned_commit_sha: "7f3b2a1", triage_json: triage,
+    incident_id: incidentId, status: "queued", pinned_commit_sha: null, triage_json: triage,
     root_cause_json: liveRunner ? null : rootCause, started_at: new Date().toISOString(),
   }).select("id").single();
   if (runError) throw runError;
@@ -164,11 +164,11 @@ export async function createInvestigation(externalKey: string, triage: TriageRes
       const githubToken = await getInstallationToken(githubRepository.installationId);
       const output = await runRepositoryInvestigation({
         repositoryUrl: githubRepository.cloneUrl, commitSha, githubToken,
-        incident: { id: externalKey, title: "Checkout API degradation", service: "checkout-api", evidence: ["Release +2m before impact", "Database timeout in logs", "5xx above threshold"] },
+        incident: { id: externalKey, title: "Repository investigation", service: selectedRepository.full_name, evidence: [...triage.symptoms, ...triage.missingEvidence] },
       });
       const liveRootCause = { ...output.result.rootCause, evidence: output.result.evidence, confidence: output.result.confidence, tests: output.result.tests, provider: "codex" as const };
       events = [
-        { type: "context_loaded", message: "Incident context loaded", detail: "Metrics, logs, and deployment metadata were attached." },
+        { type: "context_loaded", message: "Incident context loaded", detail: "Configured provider telemetry and repository metadata were attached." },
         { type: "triage_started", message: "Triage started", detail: "Classifying severity and prioritising investigation targets." },
         { type: "repository_loaded", message: "Repository snapshot loaded", detail: `${githubRepository.fullName} checked out at immutable commit ${commitSha.slice(0, 12)}.` },
         ...output.events.map((event) => ({ type: event.type, message: event.message, detail: "Executed in the isolated Codex runner with network access disabled." })),

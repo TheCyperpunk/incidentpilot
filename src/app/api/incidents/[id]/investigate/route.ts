@@ -1,5 +1,6 @@
 import { InvestigationAccessError, assertInvestigationAccess, createInvestigation } from "@/lib/investigation-store";
 import { acquireInvestigationSlot, InvestigationLimitError } from "@/lib/investigation-guard";
+import { getSentryTelemetry } from "@/lib/observability";
 import { LiveTriageError, generateTriage } from "@/lib/triage";
 
 export const runtime = "nodejs";
@@ -15,7 +16,8 @@ export async function POST(_: Request, { params }: { params: Promise<{ id: strin
   try {
     const userId = await assertInvestigationAccess();
     release = acquireInvestigationSlot(userId);
-    const triage = await generateTriage();
+    const sentry = await getSentryTelemetry();
+    const triage = await generateTriage(sentry.metrics.map((metric) => `${metric.label}: ${metric.value}. ${metric.detail}`));
     return Response.json(await createInvestigation(id, triage), { status: 201 });
   } catch (error) {
     const status = error instanceof InvestigationAccessError ? 401 : error instanceof InvestigationLimitError ? 429 : error instanceof LiveTriageError ? 502 : 500;

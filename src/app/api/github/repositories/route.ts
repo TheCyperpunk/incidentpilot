@@ -5,6 +5,12 @@ import { z } from "zod";
 
 const selectionSchema = z.object({ installationId: z.string().regex(/^\d+$/), fullName: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/) });
 
+function errorMessage(error: unknown) {
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === "object" && "message" in error && typeof error.message === "string") return error.message;
+  return "Unable to save repository selection";
+}
+
 export const runtime = "nodejs";
 
 export async function GET() {
@@ -47,6 +53,6 @@ export async function POST(request: Request) {
     if (saveError) throw saveError;
     return Response.json({ repository: saved }, { status: 201 });
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : "Unable to save repository selection" }, { status: 400 });
+    return Response.json({ error: errorMessage(error) }, { status: 400 });
   }
 }

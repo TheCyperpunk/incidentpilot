@@ -1,122 +1,105 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import Link from "next/link";
+import Image from "next/image";
+import { motion } from "motion/react";
+import { ArrowRight, Check, GitFork, Radar, ShieldCheck, Sparkles } from "lucide-react";
+import { useEffect, useState } from "react";
 
-type Activity = { title: string; detail: string; time: string; kind?: "alert" | "deploy" | "signal" | "agent" | "success" };
-type RootCause = { file: string; function: string; summary: string; evidence: string[]; confidence: string; tests: { command: string; exitCode: number; summary: string }[]; provider: string };
 type Triage = { summary: string; provider: "openai" | "simulation" };
+type RootCause = { file: string; function: string; summary: string; evidence: string[]; confidence: string; tests: { command: string; exitCode: number; summary: string }[]; provider: string };
 type ActiveRepository = { full_name: string; default_branch: string } | null;
-type InvestigationPayload = { id: string; status: string; pinnedCommitSha?: string; triage?: Triage; rootCause?: RootCause; events: { message: string; detail: string; type: string }[] };
+type Run = { id: string; status: string; pinnedCommitSha?: string; triage?: Triage; rootCause?: RootCause; events: { message: string; detail: string; type: string }[] };
+type Metric = { label: string; value: string; detail: string };
+type Observability = { metrics: Metric[]; sentry: { status: string; updatedAt?: string }; deployment: { repository: string | null; branch: string | null; commitSha: string | null } };
 
-const initialActivity: Activity[] = [
-  { title: "Checkout health threshold breached", detail: "5xx responses crossed the critical alert threshold.", time: "14:03", kind: "alert" },
-  { title: "Deployment correlated", detail: "Version v2.8.1 reached production two minutes before impact.", time: "14:01", kind: "deploy" },
-  { title: "Baseline identified", detail: "The previous healthy release was v2.8.0.", time: "13:58", kind: "signal" },
-];
-
-function Metric({ label, value, detail, alert, chart }: { label: string; value: string; detail: string; alert?: boolean; chart: number[] }) {
-  return <section className={`metric ${alert ? "metric-alert" : ""}`}><div><span>{label}</span><small>{detail}</small></div><strong>{value}</strong><div className="spark">{chart.map((height, index) => <i key={index} style={{ height: `${height}%` }} />)}</div></section>;
-}
-
-function Icon({ kind = "signal" }: { kind?: Activity["kind"] }) {
-  const path = kind === "alert" ? <path d="M12 3 2.8 19h18.4L12 3Zm0 5v4.8m0 3.2v.1" /> : kind === "success" ? <path d="m5 12 4.2 4.2L19.5 6" /> : kind === "deploy" ? <><path d="M6 5h12v4H6zM9 9v10m6-10v10M5 19h14" /><path d="M4 3h16" /></> : kind === "agent" ? <><rect x="4" y="5" width="16" height="14" rx="3" /><path d="M8 12h.01M16 12h.01M8 16c2.1 1 5.9 1 8 0" /></> : <><circle cx="12" cy="12" r="8" /><path d="M12 8v4l2.7 1.7" /></>;
-  return <span className={`event-icon ${kind}`}><svg viewBox="0 0 24 24">{path}</svg></span>;
-}
+const videoSource = "https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260506_081238_406ed0e3-5d83-436e-a512-0bbff7ec5b95.mp4";
 
 export default function Home() {
-  const [started, setStarted] = useState(false);
-  const [activity, setActivity] = useState(initialActivity);
-  const [runId, setRunId] = useState<string | null>(null);
-  const [runStatus, setRunStatus] = useState("standing by");
+  const [repository, setRepository] = useState<ActiveRepository>(null);
+  const [observability, setObservability] = useState<Observability | null>(null);
+  const [run, setRun] = useState<Run | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [triage, setTriage] = useState<Triage | null>(null);
-  const [rootCauseState, setRootCause] = useState<RootCause | null>(null);
-  const [activeRepository, setActiveRepository] = useState<ActiveRepository>(null);
-  const [pinnedCommitSha, setPinnedCommitSha] = useState<string | null>(null);
-  const rootCause = rootCauseState && {
-    ...rootCauseState,
-    tests: rootCauseState.tests.length ? rootCauseState.tests : [{ command: "No test was run or reported", exitCode: -1, summary: "Repository inspection completed without test output." }],
-  };
+  const [loading, setLoading] = useState(true);
+  const [starting, setStarting] = useState(false);
 
   useEffect(() => {
-    void fetch("/api/github/repositories").then(async (response) => {
-      if (!response.ok) return;
-      const body = await response.json() as { repository: ActiveRepository };
-      setActiveRepository(body.repository);
-    }).catch(() => undefined);
+    let cancelled = false;
+
+    async function loadWorkspace() {
+      try {
+        const [repositoryResponse, observabilityResponse, latestResponse] = await Promise.all([
+          fetch("/api/github/repositories", { cache: "no-store" }),
+          fetch("/api/observability", { cache: "no-store" }),
+          fetch("/api/incidents/INC-2048/latest", { cache: "no-store" }),
+        ]);
+        if (cancelled) return;
+        if (repositoryResponse.ok) setRepository((await repositoryResponse.json() as { repository: ActiveRepository }).repository);
+        if (observabilityResponse.ok) setObservability(await observabilityResponse.json() as Observability);
+        if (latestResponse.ok) setRun(await latestResponse.json() as Run);
+      } catch (cause) {
+        if (!cancelled) setError(cause instanceof Error ? cause.message : "Unable to load the workspace");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    void loadWorkspace();
+    return () => { cancelled = true; };
   }, []);
 
-  useEffect(() => {
-    const restoreLatestRun = async () => {
-      const response = await fetch("/api/incidents/INC-2048/latest", { cache: "no-store" });
-      if (response.status === 401 || response.status === 404) return;
-      const run = await response.json() as InvestigationPayload & { error?: string };
-      if (!response.ok) throw new Error(run.error ?? "Unable to restore investigation status");
-      setRunId(run.id);
-      setStarted(run.status !== "failed" && run.status !== "resolved");
-      setRunStatus(run.status.replaceAll("_", " "));
-      setPinnedCommitSha(run.pinnedCommitSha ?? null);
-      if (run.triage) setTriage(run.triage);
-      if (run.rootCause) setRootCause(run.rootCause);
-      setActivity([...run.events.map((event): Activity => ({ title: event.message, detail: event.detail, time: "saved", kind: event.type === "resolved" ? "success" : "agent" })), ...initialActivity]);
-    };
-    void restoreLatestRun().catch((cause: Error) => setError(cause.message));
-  }, []);
-
-  useEffect(() => {
-    if (!runId) return;
-    const refresh = async () => {
-      const response = await fetch(`/api/investigation-runs/${runId}`);
-      const run = await response.json() as InvestigationPayload & { error?: string };
-      if (!response.ok) throw new Error(run.error ?? "Unable to refresh investigation status");
-      setRunStatus(run.status.replaceAll("_", " "));
-      setPinnedCommitSha(run.pinnedCommitSha ?? null);
-      if (run.triage) setTriage(run.triage);
-      if (run.rootCause) setRootCause(run.rootCause);
-      setActivity([...run.events.map((event): Activity => ({ title: event.message, detail: event.detail, time: "now", kind: event.type === "resolved" ? "success" : "agent" })), ...initialActivity]);
-    };
-    void refresh().catch((cause: Error) => setError(cause.message));
-    const timer = window.setInterval(() => void refresh().catch((cause: Error) => setError(cause.message)), 900);
-    return () => window.clearInterval(timer);
-  }, [runId]);
-
-  async function investigate() {
-    if (started) return;
-    setStarted(true); setError(null);
+  async function startInvestigation() {
+    if (!repository) { setError("Choose a repository before starting an investigation."); return; }
+    setStarting(true); setError(null);
     try {
       const response = await fetch("/api/incidents/INC-2048/investigate", { method: "POST" });
-      const run = await response.json() as InvestigationPayload & { error?: string };
-      if (!response.ok) throw new Error(run.error ?? "Unable to start investigation");
-      setRunId(run.id); setPinnedCommitSha(run.pinnedCommitSha ?? null); if (run.triage) setTriage(run.triage);
-    } catch (cause) { setStarted(false); setError(cause instanceof Error ? cause.message : "Unable to start investigation"); }
+      const body = await response.json() as Run & { error?: string };
+      if (!response.ok) throw new Error(body.error ?? "Unable to start the investigation");
+      setRun(body);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to start the investigation"); }
+    finally { setStarting(false); }
   }
 
-  async function approve() {
-    if (!runId) return;
-    const response = await fetch(`/api/investigation-runs/${runId}/approve`, { method: "POST" });
-    const run = await response.json();
-    if (!response.ok) { setError(run.error ?? "Unable to approve mitigation"); return; }
-    setRunStatus(run.status.replaceAll("_", " "));
-  }
+  const sentryReady = observability?.sentry.status === "connected";
+  const repositoryReady = Boolean(repository);
+  const investigationReady = Boolean(run?.rootCause?.provider === "codex");
+  const rootCause = run?.rootCause?.provider === "codex" ? run.rootCause : null;
+  const steps = [sentryReady, repositoryReady, investigationReady];
+  const activeStep = steps.findIndex((complete) => !complete) + 1 || 3;
 
-  const resolved = runStatus === "resolved";
-  const liveRepositoryEvidence = rootCause?.provider === "codex";
-  return <main className="app-shell">
-    <nav className="topbar"><Link className="brand" href="/"><b>i</b> incident<span>pilot</span></Link><i className="divider" /><span className="workspace-dot" /> <span className="workspace-name">Production command center</span><div className="top-actions"><span className="sim-label"><i /> {liveRepositoryEvidence ? "GitHub App evidence" : "Controlled simulation"}</span><Link href="/settings/github">Repositories</Link><Link href="/login">Sign in <b>-&gt;</b></Link></div></nav>
-    <div className="dashboard">
-      <header className="hero"><div className="crumb">INCIDENTS <b>/</b> ACTIVE <b>/</b> <strong>INC-2048</strong></div><div className="hero-row"><div><div className="badges"><span className="severity">SEV 2</span><span className="live"><i /> Live incident</span></div><h1>Checkout API <em>degradation</em></h1><p>Checkout requests started failing shortly after the v2.8.1 production release.</p></div><div className="state"><span>INCIDENT STATE</span><strong className={resolved ? "resolved" : ""}><i /> {resolved ? "Resolved" : started ? runStatus : "Ready to investigate"}</strong><small>Started today at 14:03</small></div></div></header>
-      <section className="metrics"><Metric label="Error rate" value={resolved ? "0.4%" : "18.4%"} detail={resolved ? "Recovered" : "+18.1 pts"} alert={!resolved} chart={resolved ? [20,25,21,18,17,15,13,12] : [14,16,20,25,31,46,73,96]} /><Metric label="P95 latency" value={resolved ? "180ms" : "850ms"} detail={resolved ? "Baseline" : "+670ms"} alert={!resolved} chart={resolved ? [31,35,27,30,24,25,26,23] : [17,19,23,31,44,58,82,94]} /><Metric label="Database CPU" value={resolved ? "41%" : "94%"} detail={resolved ? "Normal" : "+53%"} alert={!resolved} chart={resolved ? [34,39,35,42,38,43,39,41] : [28,31,37,43,56,67,83,97]} /><Metric label="Current release" value={resolved ? "v2.8.0" : "v2.8.1"} detail={resolved ? "Rolled back" : "14:01 deploy"} chart={[20,20,20,20,20,20,20,20]} /></section>
-      <section className="workspace"><div className="primary">
-        <section className="panel action-panel"><div className="panel-head"><div><p>INVESTIGATION</p><h2>Decide with evidence, not instinct.</h2></div><span className={`run-state ${started ? "active" : ""}`}><i /> {started ? "Runner active" : "Ready to investigate"}</span></div><div className="action-content"><div><p>Signals point to a database query regression, but a rollback needs repository evidence and a human decision.</p><div className="signals"><span>Release +2m before impact</span><span>Database timeout in logs</span><span>5xx above threshold</span></div></div><button onClick={investigate} disabled={started}><span>{started ? "Investigation in progress" : "Start investigation"}<small>{started ? "Gathering evidence" : "Pin commit and inspect evidence"}</small></span><b>-&gt;</b></button></div>{error && <div className="request-error">{error} {!started && error.includes("Sign in") && <a href="/login">Sign in to continue</a>}</div>}<footer><span>Verified commit</span><span>Test output captured</span><span>Approval required</span></footer></section>
-        <section className="panel timeline-panel"><div className="panel-head"><div><p>INCIDENT TIMELINE</p><h2>Evidence trail</h2></div><span className="count">{activity.length} events</span></div><ol>{activity.map((item, index) => <li key={`${item.title}-${index}`}><Icon kind={item.kind} /><div><h3>{item.title}</h3><p>{item.detail}</p></div><time>{item.time}</time></li>)}</ol></section>
-        {triage && <section className="panel triage"><b>AI</b><div><p>TRIAGE HYPOTHESIS</p><h2>Investigation priority established</h2><span>{triage.summary}</span><small>{triage.provider === "openai" ? "Generated by OpenAI. Hypothesis only; repository evidence and tests are still required." : "Controlled simulation fallback. Repository evidence and tests are still required."}</small></div></section>}
-        {rootCause && <section className="panel root-cause"><div className="panel-head"><div><p>ROOT-CAUSE HYPOTHESIS</p><h2>Database query regression</h2></div><span className="confidence">{rootCause.confidence} confidence</span></div><p className="root-summary">{rootCause.summary}</p><div className="code"><div><span>FILE</span><strong>{rootCause.file}</strong></div><div><span>FUNCTION</span><strong>{rootCause.function}()</strong></div></div><ul>{rootCause.evidence.map((item) => <li key={item}><b>+</b>{item}</li>)}</ul><div className="test"><div><span>REGRESSION TEST</span><code>{rootCause.tests[0].command}</code></div><b>{rootCause.tests[0].exitCode === -1 ? "Not run" : `Exit ${rootCause.tests[0].exitCode}`}</b></div><small className="source">Source: {rootCause.provider === "simulation" ? "controlled simulation" : "isolated Codex runner"}</small>{!resolved && <button className="approve" onClick={approve} disabled={runStatus !== "awaiting approval"}>{runStatus === "awaiting approval" ? "Approve simulated rollback" : "Waiting for evidence verification"}<b>-&gt;</b></button>}{resolved && <div className="recovery"><b>✓</b><span><strong>Recovery verified</strong>All monitored thresholds are back within the healthy range.</span><a href="/incidents/INC-2048/postmortem">Read postmortem -&gt;</a></div>}</section>}
-      </div><aside>
-        <section className="panel deployment"><div className="panel-head"><div><p>DEPLOYMENT CONTEXT</p><h2>Version v2.8.1</h2></div><span>Production</span></div><div className="deploy-rail"><i /><i /><i /></div><dl><div><dt>Repository</dt><dd>{activeRepository?.full_name ?? "Not selected"} <small>{activeRepository ? "GitHub App" : "Repositories"}</small></dd></div><div><dt>Branch</dt><dd className="mono">{activeRepository?.default_branch ?? "—"}</dd></div><div><dt>Pinned commit</dt><dd className="mono">{pinnedCommitSha ?? "—"}</dd></div><div><dt>Last known healthy</dt><dd>v2.8.0 <small>13:58</small></dd></div></dl></section>
-        <section className="panel runner"><div className="runner-mark"><i /><b /></div><p>CODEX RUNNER</p><h2>{started ? runStatus : "Standing by"}</h2><span>{started ? "A disposable worker is checking the pinned repository snapshot." : "The worker starts only after you open an investigation."}</span><ul><li>Isolated workspace</li><li>Network disabled</li><li>Human approval gate</li></ul></section>
-        <div className="simulation-note"><b>!</b><p><strong>{liveRepositoryEvidence ? "Repository evidence is live" : "Simulation mode"}</strong>{liveRepositoryEvidence ? "The root-cause review used an isolated GitHub App and Codex runner; mitigation remains approval-gated and simulated." : "No repository or production action will run until integrations are explicitly configured."}</p></div>
-      </aside></section>
-    </div>
+  return <main className="flow-shell">
+    <section className="flow-hero" aria-label="IncidentPilot workflow">
+      <video autoPlay muted loop playsInline className="flow-video"><source src={videoSource} type="video/mp4" /></video>
+      <motion.div className="hero-content" initial="hidden" animate="visible" variants={{ hidden: { opacity: 0 }, visible: { opacity: 1, transition: { staggerChildren: 0.15, delayChildren: 0.2 } } }}>
+        <motion.div variants={reveal} className="hero-brand"><Image src="/incidentpilot-logo.png" alt="IncidentPilot logo" width={28} height={28} className="brand-logo" priority /><span>incident pilot</span></motion.div>
+        <motion.div variants={reveal}><p className="hero-kicker">EVIDENCE-FIRST RESPONSE</p><h1>Start calm.<br />Move with proof.</h1><p className="hero-copy">Three clear phases take you from connected data to a human-approved decision.</p></motion.div>
+        <motion.div variants={reveal} className="hero-steps"><StepItem number={1} text="Connect your signals" active={activeStep === 1} /><StepItem number={2} text="Choose your repository" active={activeStep === 2} /><StepItem number={3} text="Review investigation" active={activeStep === 3} /></motion.div>
+      </motion.div>
+    </section>
+
+    <section className="flow-panel">
+      <motion.div className="flow-content" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.8, ease: "easeOut" }}>
+        <nav className="flow-nav"><Link className="wordmark" href="/"><Image src="/incidentpilot-logo.png" alt="" width={30} height={30} className="brand-logo" priority /><span className="wordmark-label">incident <b>pilot</b></span></Link><Link href="/login" className="text-link">Sign in</Link></nav>
+        <header className="flow-header"><p className="eyebrow">GUIDED INVESTIGATION</p><h2>{loading ? "Loading your workspace" : investigationReady ? "Evidence is ready" : "Open an investigation"}</h2><p>Complete one phase at a time. We only enable the next action when its evidence is available.</p></header>
+
+        <div className="flow-steps">
+          <section className={`flow-card ${sentryReady ? "complete" : "active"}`}><div className="flow-card-top"><div className="flow-number">{sentryReady ? <Check size={15} /> : "1"}</div><div><p>PHASE 1</p><h3>Connect your signals</h3></div><Radar size={19} /></div><p className="flow-description">Sentry supplies errors and latency. Database and deployment sources stay clearly marked until you connect them.</p><div className="signal-list">{(observability?.metrics ?? []).slice(0, 3).map((metric) => <div key={metric.label}><span>{metric.label}</span><strong>{metric.value}</strong><small>{metric.detail}</small></div>) || <span className="muted">Checking Sentry connection...</span>}</div><span className={`status-chip ${sentryReady ? "ready" : "waiting"}`}>{sentryReady ? "Sentry connected" : "Sentry is collecting data"}</span></section>
+
+          <section className={`flow-card ${repositoryReady ? "complete" : activeStep === 2 ? "active" : ""}`}><div className="flow-card-top"><div className="flow-number">{repositoryReady ? <Check size={15} /> : "2"}</div><div><p>PHASE 2</p><h3>Choose one repository</h3></div><GitFork size={19} /></div><p className="flow-description">The runner can inspect only the repository you explicitly select through your GitHub App installation.</p>{repository ? <div className="repository-summary"><strong>{repository.full_name}</strong><span>{repository.default_branch} branch</span></div> : <div className="repository-summary muted">No repository selected</div>}<Link href="/settings/github" className="secondary-action">{repository ? "Change repository" : "Choose repository"}<ArrowRight size={16} /></Link></section>
+
+          <section className={`flow-card ${investigationReady ? "complete" : activeStep === 3 ? "active" : ""}`}><div className="flow-card-top"><div className="flow-number">{investigationReady ? <Check size={15} /> : "3"}</div><div><p>PHASE 3</p><h3>Inspect and decide</h3></div><ShieldCheck size={19} /></div><p className="flow-description">IncidentPilot pins an immutable commit, runs an isolated investigation, and waits for your approval before any mitigation.</p><button className="primary-action" onClick={() => void startInvestigation()} disabled={!repositoryReady || starting || investigationReady}>{starting ? "Investigation in progress" : investigationReady ? "Investigation complete" : "Start investigation"}<ArrowRight size={17} /></button>{!repositoryReady && <small className="card-note">Select a repository to unlock this phase.</small>}</section>
+        </div>
+
+        {error && <p className="flow-error">{error}</p>}
+        {run?.triage?.provider === "openai" && <section className="evidence-card"><Sparkles size={18} /><div><p>OPENAI TRIAGE</p><strong>{run.triage.summary}</strong></div></section>}
+        {rootCause && <section className="evidence-card result"><ShieldCheck size={18} /><div><p>ISOLATED CODEX RUNNER</p><strong>{rootCause.summary}</strong><small><code>{rootCause.file}</code> at immutable commit <code>{run?.pinnedCommitSha?.slice(0, 12)}</code></small></div></section>}
+      </motion.div>
+    </section>
   </main>;
+}
+
+const reveal = { hidden: { opacity: 0, y: 10 }, visible: { opacity: 1, y: 0, transition: { duration: 0.5 } } };
+
+function StepItem({ number, text, active = false }: { number: number; text: string; active?: boolean }) {
+  return <div className={`hero-step ${active ? "active" : ""}`}><span>{number}</span><strong>{text}</strong></div>;
 }

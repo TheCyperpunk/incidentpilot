@@ -10,6 +10,12 @@ export type GitHubRepository = {
   installationId: string;
 };
 
+export type GitHubCommit = {
+  sha: string;
+  message: string;
+  committedAt: string;
+};
+
 function required(name: string) {
   const value = process.env[name]?.trim();
   if (!value) throw new Error(`${name} is not configured`);
@@ -69,4 +75,16 @@ export async function getCommitSha(repository: GitHubRepository, ref: string) {
   const { data } = await octokit.rest.repos.getCommit({ owner, repo, ref });
   if (!/^[a-f0-9]{40}$/i.test(data.sha)) throw new Error("GitHub did not return an immutable commit SHA");
   return data.sha;
+}
+
+/** Returns deployment context from the selected repository without treating a commit as a deployment. */
+export async function getLatestCommit(repository: GitHubRepository): Promise<GitHubCommit> {
+  const [owner, repo] = repository.fullName.split("/");
+  const octokit = await app().getInstallationOctokit(Number(repository.installationId));
+  const { data } = await octokit.rest.repos.getCommit({ owner, repo, ref: repository.defaultBranch });
+  const committedAt = data.commit.committer?.date ?? data.commit.author?.date;
+  if (!/^[a-f0-9]{40}$/i.test(data.sha) || !committedAt) {
+    throw new Error("GitHub did not return complete commit metadata");
+  }
+  return { sha: data.sha, message: data.commit.message.split("\n", 1)[0], committedAt };
 }

@@ -21,12 +21,12 @@ export class LiveTriageError extends Error {
 
 const simulation: TriageResult = {
   provider: "simulation",
-  summary: "Checkout API errors and latency rose immediately after v2.8.1. Database CPU and timeout logs make a query regression the leading hypothesis.",
-  suspectedService: "checkout-api",
-  severity: "high",
-  symptoms: ["HTTP 500 spike", "P95 latency increase", "Database CPU increase"],
-  investigationTargets: ["v2.8.1 commit diff", "checkout database queries", "checkout regression tests"],
-  missingEvidence: ["Query execution plan from the degraded deployment"],
+  summary: "Live OpenAI triage is not configured. No root-cause hypothesis was produced from simulated telemetry.",
+  suspectedService: "unidentified",
+  severity: "low",
+  symptoms: ["No verified provider evidence is available to classify an incident."],
+  investigationTargets: ["Connect observability providers and collect a real incident signal."],
+  missingEvidence: ["Provider telemetry", "deployment metadata", "repository evidence"],
 };
 
 const schema = {
@@ -43,7 +43,7 @@ const schema = {
   },
 } as const;
 
-export async function generateTriage(): Promise<TriageResult> {
+export async function generateTriage(evidence: string[]): Promise<TriageResult> {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) return simulation;
 
@@ -63,7 +63,7 @@ export async function generateTriage(): Promise<TriageResult> {
         },
         {
           role: "user",
-          content: "Incident: Checkout API degradation. Service: checkout-api. Severity: high. Deployment: v2.8.1 at 14:01. At 14:03: error rate 18.4% (baseline 0.3%), p95 latency 850ms (baseline 180ms), DB CPU 94% (baseline 41%). Logs: database query timeout; checkout request failed.",
+          content: `Incident: repository investigation requested. Use only this provider evidence:\n${evidence.map((item) => `- ${item}`).join("\n") || "- No provider evidence is configured."}`,
         },
       ],
       text: { format: { type: "json_schema", name: "incident_triage", strict: true, schema } },
