@@ -1,0 +1,19 @@
+{
+  "name": "incidentpilot-codex-runner",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "start": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@openai/codex-sdk": "^0.155.1",
+    "dotenv": "^16.6.1",
+    "tsx": "^4.21.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.0.0"
+  }
+}
