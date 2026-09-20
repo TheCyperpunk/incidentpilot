@@ -76,10 +76,12 @@ Not recorded yet. Before final submission, add a public video link here showing:
 
 ## Screenshots
 
-Add final screenshots here before submission. Recommended captures:
+### Guided repository setup
 
-- Guided investigation workspace with Sentry telemetry.
-- Repository selection screen with an active repository.
+![IncidentPilot repository setup](docs/screenshots/guided-repository-setup.png)
+
+Before final submission, add these clean working captures as well:
+
 - A completed investigation showing the immutable commit, Codex evidence, and `Awaiting Approval` state.
 
 ## How to Run Locally
